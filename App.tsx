@@ -6,8 +6,9 @@ import ChecklistItemListRow from './components/ChecklistItemListRow';
 import StatsBoard from './components/StatsBoard';
 import CalendarView from './components/CalendarView';
 import ConfirmationModal from './components/ConfirmationModal';
-import { HeartIcon, GearIcon, UploadIcon, LogOutIcon, LockIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon } from './components/Icons';
-import { resizeImage, safeLocalStorageSet } from './utils';
+import { HeartIcon, GearIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon } from './components/Icons';
+import { resizeImage } from './utils';
+import { supabase } from './supabaseClient';
 
 const DEFAULT_THEME: AppTheme = {
   primaryColor: '#ec4899', secondaryColor: '#fce7f3', 
@@ -46,71 +47,47 @@ const ANIMATIONS = [
   { id: 'none', name: 'Parado' },
 ];
 
+// Helpers para mapeamento seguro de dados do DB
+const mapDbItem = (i: any): ChecklistItem => ({
+   id: i.id,
+   title: i.title || 'Sem título',
+   price: Number(i.price) || 0,
+   status: i.status || ItemStatus.PENDING,
+   progress: Number(i.progress) || 0,
+   link: i.link || '',
+   createdAt: i.created_at ? new Date(i.created_at).getTime() : Date.now(),
+   image: i.image || undefined,
+   imageFit: i.image_fit || 'cover',
+   imageScale: Number(i.image_scale) || 1,
+   imagePositionX: Number(i.image_position_x) || 50,
+   imagePositionY: Number(i.image_position_y) || 50
+});
+
+const mapDbEvent = (e: any): CalendarEvent => ({
+    id: e.id, 
+    title: e.title || 'Evento', 
+    date: e.date || new Date().toISOString().split('T')[0], 
+    description: e.description || ''
+});
+
 const App: React.FC = () => {
   // Auth States
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [session, setSession] = useState<any>(null);
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [authData, setAuthData] = useState(() => {
-    try {
-      const stored = localStorage.getItem('couple_auth_v2');
-      return stored ? JSON.parse(stored) : null;
-    } catch { return null; }
-  });
-  
   const [fields, setFields] = useState({ email: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
 
   // Main Data States
-  const [items, setItems] = useState<ChecklistItem[]>(() => {
-    try {
-      const stored = localStorage.getItem('couple_checklist');
-      const parsed = stored ? JSON.parse(stored) : [];
-      return parsed.map((i: any) => ({
-        ...i,
-        progress: typeof i.progress === 'number' ? i.progress : 
-                  (i.status === 'DONE' ? 100 : 
-                   i.status === 'ALMOST_THERE' ? 80 : 
-                   i.status === 'IN_PROGRESS' ? 30 : 0),
-        link: i.link || ''
-      }));
-    } catch { return []; }
-  });
-
-  const [events, setEvents] = useState<CalendarEvent[]>(() => {
-    try {
-      const stored = localStorage.getItem('couple_events');
-      return stored ? JSON.parse(stored) : [];
-    } catch { return []; }
-  });
-
-  const [budgetLevels, setBudgetLevels] = useState<BudgetLevel[]>(() => {
-    try {
-      const stored = localStorage.getItem('couple_budget_levels');
-      return stored ? JSON.parse(stored) : DEFAULT_LEVELS;
-    } catch { return DEFAULT_LEVELS; }
-  });
-
-  const [initialSavings, setInitialSavings] = useState<number>(() => {
-    try {
-      const stored = localStorage.getItem('couple_initial_savings');
-      return stored ? parseFloat(stored) : 0;
-    } catch { return 0; }
-  });
-
-  const [theme, setTheme] = useState<AppTheme>(() => {
-    try {
-      const stored = localStorage.getItem('couple_theme');
-      return stored ? JSON.parse(stored) : DEFAULT_THEME;
-    } catch { return DEFAULT_THEME; }
-  });
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [items, setItems] = useState<ChecklistItem[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [budgetLevels, setBudgetLevels] = useState<BudgetLevel[]>(DEFAULT_LEVELS);
+  const [initialSavings, setInitialSavings] = useState<number>(0);
+  const [theme, setTheme] = useState<AppTheme>(DEFAULT_THEME);
 
   const [viewMode, setViewMode] = useState<'checklist' | 'calendar'>('checklist');
-  const [checklistLayout, setChecklistLayout] = useState<'grid' | 'list'>(() => {
-    try {
-      return (localStorage.getItem('couple_layout_mode') as 'grid' | 'list') || 'grid';
-    } catch { return 'grid'; }
-  });
+  const [checklistLayout, setChecklistLayout] = useState<'grid' | 'list'>('grid');
 
   const [sortBy, setSortBy] = useState('newest');
   const [isFormVisible, setIsFormVisible] = useState(false);
@@ -124,18 +101,122 @@ const App: React.FC = () => {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const bgInputRef = useRef<HTMLInputElement>(null);
 
+  // Inicialização e Auth
   useEffect(() => {
-    if (!isAuthenticated) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchData(session.user.id, session.user.email);
+    });
 
-    safeLocalStorageSet('couple_checklist', items);
-    safeLocalStorageSet('couple_events', events);
-    safeLocalStorageSet('couple_theme', theme);
-    safeLocalStorageSet('couple_budget_levels', budgetLevels);
-    localStorage.setItem('couple_initial_savings', initialSavings.toString());
-    localStorage.setItem('couple_layout_mode', checklistLayout);
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        fetchData(session.user.id, session.user.email);
+      } else {
+        setItems([]);
+        setEvents([]);
+        setTheme(DEFAULT_THEME);
+      }
+    });
 
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Realtime Subscriptions
+  useEffect(() => {
+    if (!session) return;
+
+    const channel = supabase.channel('couple_sync')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'checklist_items', filter: `user_id=eq.${session.user.id}` }, 
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            setItems(prev => [mapDbItem(payload.new), ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            setItems(prev => prev.map(i => i.id === payload.new.id ? mapDbItem(payload.new) : i));
+          } else if (payload.eventType === 'DELETE') {
+            setItems(prev => prev.filter(i => i.id !== payload.old.id));
+          }
+        }
+      )
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'calendar_events', filter: `user_id=eq.${session.user.id}` },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            setEvents(prev => [...prev, mapDbEvent(payload.new)]);
+          } else if (payload.eventType === 'DELETE') {
+            setEvents(prev => prev.filter(e => e.id !== payload.old.id));
+          }
+        }
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${session.user.id}` },
+        (payload) => {
+          const newProfile = payload.new;
+          if (newProfile.theme) setTheme(newProfile.theme);
+          if (newProfile.budget_levels) setBudgetLevels(newProfile.budget_levels);
+          if (newProfile.initial_savings !== null) setInitialSavings(Number(newProfile.initial_savings));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session]);
+
+  // Fetch Data com criação lazy de perfil
+  const fetchData = async (userId: string, userEmail?: string) => {
+    setIsLoadingData(true);
+    try {
+      // 1. Perfis
+      let { data: profile, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      
+      // Se não existir perfil, cria um padrão (Lazy Creation)
+      if (error && (error.code === 'PGRST116' || error.message.includes('JSON'))) {
+         const { data: newProfile, error: createError } = await supabase.from('profiles').insert({
+           id: userId,
+           email: userEmail,
+           theme: DEFAULT_THEME,
+           budget_levels: DEFAULT_LEVELS,
+           initial_savings: 0
+         }).select().single();
+         
+         if (!createError) {
+           profile = newProfile;
+         }
+      }
+
+      if (profile) {
+        if (profile.theme && Object.keys(profile.theme).length > 0) setTheme(profile.theme);
+        if (profile.budget_levels && Array.isArray(profile.budget_levels) && profile.budget_levels.length > 0) setBudgetLevels(profile.budget_levels);
+        if (profile.initial_savings !== null) setInitialSavings(Number(profile.initial_savings));
+      }
+
+      // 2. Itens
+      const { data: dbItems } = await supabase.from('checklist_items').select('*').order('created_at', { ascending: false });
+      if (dbItems) {
+        setItems(dbItems.map(mapDbItem));
+      }
+
+      // 3. Eventos
+      const { data: dbEvents } = await supabase.from('calendar_events').select('*');
+      if (dbEvents) {
+        setEvents(dbEvents.map(mapDbEvent));
+      }
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
+  // Efeito para aplicar tema (CSS Variables)
+  useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--primary', theme.primaryColor);
     root.style.setProperty('--secondary', theme.secondaryColor);
@@ -152,58 +233,89 @@ const App: React.FC = () => {
       body.style.backgroundPosition = 'center';
       body.style.backgroundAttachment = 'fixed';
     }
-  }, [items, events, theme, budgetLevels, initialSavings, isAuthenticated, checklistLayout]);
+  }, [theme]);
+
+  // Sync Data Updates
+  const updateProfileData = async (updates: any) => {
+    if (!session) return;
+    // Otimização: Não precisamos atualizar o estado local aqui se o Realtime estiver ativo,
+    // mas mantemos para garantir responsividade instantânea na UI do próprio usuário
+    try {
+      await supabase.from('profiles').upsert({
+        id: session.user.id,
+        email: session.user.email,
+        updated_at: new Date(),
+        ...updates
+      }, { onConflict: 'id' });
+    } catch (error) {
+      console.error('Error updating profile:', error);
+    }
+  };
+
+  const handleThemeChange = (newTheme: AppTheme) => {
+    setTheme(newTheme);
+    updateProfileData({ theme: newTheme });
+  };
+
+  const handleSavingsChange = (newSavings: number) => {
+    setInitialSavings(newSavings);
+    updateProfileData({ initial_savings: newSavings });
+  };
+
+  const handleLevelsChange = (newLevels: BudgetLevel[]) => {
+    setBudgetLevels(newLevels);
+    updateProfileData({ budget_levels: newLevels });
+  };
+
 
   // Auth Handlers
-  const handleAuth = (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
     setIsAuthenticating(true);
 
-    setTimeout(() => {
+    try {
       if (authView === 'signup') {
         if (!fields.email || !fields.password) {
-          setAuthError('Preencha todos os campos.');
-        } else if (fields.password !== fields.confirmPassword) {
-          setAuthError('As senhas não coincidem.');
-        } else {
-          const newAuth = { email: fields.email, password: fields.password, provider: 'local' };
-          localStorage.setItem('couple_auth_v2', JSON.stringify(newAuth));
-          setAuthData(newAuth);
-          setIsAuthenticated(true);
+           throw new Error('Preencha todos os campos.');
         }
+        if (fields.password !== fields.confirmPassword) {
+           throw new Error('As senhas não coincidem.');
+        }
+        const { error } = await supabase.auth.signUp({
+          email: fields.email,
+          password: fields.password,
+        });
+        if (error) throw error;
+        alert('Conta criada! Verifique seu e-mail ou faça login (se o auto-confirm estiver ativo).');
+        setAuthView('login');
       } else {
-        if (authData && fields.email === authData.email && fields.password === authData.password) {
-          setIsAuthenticated(true);
-        } else {
-          setAuthError('E-mail ou senha incorretos.');
-        }
+        const { error } = await supabase.auth.signInWithPassword({
+          email: fields.email,
+          password: fields.password,
+        });
+        if (error) throw error;
       }
+    } catch (error: any) {
+      setAuthError(error.message || 'Erro na autenticação.');
+    } finally {
       setIsAuthenticating(false);
-    }, 800);
+    }
   };
 
-  const handleSocialAuth = (provider: 'google' | 'microsoft') => {
+  const handleSocialAuth = async (provider: 'google' | 'azure') => {
     setIsAuthenticating(true);
-    setAuthError('');
-    
-    // Simulate OAuth Delay
-    setTimeout(() => {
-      const socialAuth = { 
-        email: `${provider}@exemplo.com`, 
-        provider, 
-        name: provider === 'google' ? 'Usuário Google' : 'Usuário Microsoft' 
-      };
-      localStorage.setItem('couple_auth_v2', JSON.stringify(socialAuth));
-      setAuthData(socialAuth);
-      setIsAuthenticated(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: provider,
+    });
+    if (error) {
+      setAuthError(error.message);
       setIsAuthenticating(false);
-    }, 1500);
+    }
   };
 
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    setFields({ email: '', password: '', confirmPassword: '' });
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
   };
 
   // Checklist Handlers
@@ -226,29 +338,102 @@ const App: React.FC = () => {
     }
   };
 
-  const addItem = (e: React.FormEvent) => {
+  const addItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.title.trim()) return;
+    if (!formData.title.trim() || !session) return;
 
-    const newItem: ChecklistItem = {
-      id: crypto.randomUUID(), title: formData.title.trim(), 
+    // Optimistic UI: Add immediately to state (will be deduped by Realtime or replaced)
+    // Actually, safer to wait for DB confirmation to avoid ID collision or double entry with Realtime
+    
+    const newItemData = {
+      user_id: session.user.id,
+      title: formData.title.trim(), 
       price: parseFloat(formData.price) || 0, 
       link: formData.link.trim(),
       status: ItemStatus.PENDING, 
       progress: 0,
-      createdAt: Date.now(), image: formData.image,
-      imageFit: formData.fit, imageScale: formData.scale, 
-      imagePositionX: formData.x, imagePositionY: formData.y
+      created_at: Date.now(), 
+      image: formData.image,
+      image_fit: formData.fit, 
+      image_scale: formData.scale, 
+      image_position_x: formData.x, 
+      image_position_y: formData.y
     };
 
-    setItems(prev => [newItem, ...prev]);
-    setFormData({ title: '', price: '', link: '', image: undefined, fit: 'cover', scale: 1, x: 50, y: 50, adjusting: false });
-    setIsFormVisible(false);
+    try {
+      const { error } = await supabase.from('checklist_items').insert(newItemData);
+      if (error) throw error;
+      
+      setFormData({ title: '', price: '', link: '', image: undefined, fit: 'cover', scale: 1, x: 50, y: 50, adjusting: false });
+      setIsFormVisible(false);
+    } catch (error) {
+      console.error('Error adding item:', error);
+      alert('Erro ao salvar item.');
+    }
   };
 
-  const updateItem = useCallback((id: string, updates: Partial<ChecklistItem>) => {
+  const updateItem = useCallback(async (id: string, updates: Partial<ChecklistItem>) => {
+    // Optimistic Update
     setItems(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i));
+
+    // Map camelCase to snake_case for DB
+    const dbUpdates: any = {};
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.price !== undefined) dbUpdates.price = updates.price;
+    if (updates.link !== undefined) dbUpdates.link = updates.link;
+    if (updates.status !== undefined) dbUpdates.status = updates.status;
+    if (updates.progress !== undefined) dbUpdates.progress = updates.progress;
+    if (updates.image !== undefined) dbUpdates.image = updates.image;
+    if (updates.imageFit !== undefined) dbUpdates.image_fit = updates.imageFit;
+    if (updates.imageScale !== undefined) dbUpdates.image_scale = updates.imageScale;
+    if (updates.imagePositionX !== undefined) dbUpdates.image_position_x = updates.imagePositionX;
+    if (updates.imagePositionY !== undefined) dbUpdates.image_position_y = updates.imagePositionY;
+
+    try {
+      await supabase.from('checklist_items').update(dbUpdates).eq('id', id);
+    } catch (error) {
+      console.error('Error updating item:', error);
+    }
   }, []);
+
+  const deleteItem = async () => {
+    if (!itemToDelete) return;
+    const id = itemToDelete.id;
+    
+    // We can rely on Realtime to remove it from UI, but optimistic feels faster
+    setItems(prev => prev.filter(i => i.id !== id));
+    setItemToDelete(null);
+
+    try {
+      await supabase.from('checklist_items').delete().eq('id', id);
+    } catch (error) {
+      console.error('Error deleting item:', error);
+    }
+  };
+
+  // Calendar Handlers
+  const addEvent = async (event: CalendarEvent) => {
+    if(!session) return;
+    try {
+        await supabase.from('calendar_events').insert({
+            user_id: session.user.id,
+            title: event.title,
+            date: event.date,
+            description: event.description
+        });
+    } catch (e) {
+        console.error('Error adding event', e);
+    }
+  };
+
+  const deleteEvent = async (id: string) => {
+    setEvents(prev => prev.filter(e => e.id !== id));
+    try {
+        await supabase.from('calendar_events').delete().eq('id', id);
+    } catch (e) {
+        console.error('Error deleting event', e);
+    }
+  };
 
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => {
@@ -260,14 +445,14 @@ const App: React.FC = () => {
   }, [items, sortBy]);
 
   // Auth Screens
-  if (!isAuthenticated) {
+  if (!session) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center p-6 bg-cover bg-center" style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.3)), url(${DEFAULT_THEME.backgroundImage})` }}>
         <div className="bg-white/80 backdrop-blur-3xl p-8 sm:p-12 rounded-[3.5rem] shadow-3xl w-full max-w-lg border-2 border-white/50 animate-in zoom-in-95 duration-500 overflow-hidden relative">
           {isAuthenticating && (
             <div className="absolute inset-0 bg-white/60 backdrop-blur-sm z-50 flex flex-col items-center justify-center gap-4">
               <div className="w-12 h-12 border-4 border-pink-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs font-black text-pink-500 uppercase tracking-widest">Validando Acesso...</p>
+              <p className="text-xs font-black text-pink-500 uppercase tracking-widest">Conectando...</p>
             </div>
           )}
 
@@ -316,7 +501,7 @@ const App: React.FC = () => {
                 <GoogleIcon className="w-5 h-5" />
                 <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Google</span>
               </button>
-              <button onClick={() => handleSocialAuth('microsoft')} className="flex items-center justify-center gap-3 py-4 bg-white border-2 border-gray-50 rounded-2xl hover:border-blue-100 hover:shadow-md transition-all active:scale-95">
+              <button onClick={() => handleSocialAuth('azure')} className="flex items-center justify-center gap-3 py-4 bg-white border-2 border-gray-50 rounded-2xl hover:border-blue-100 hover:shadow-md transition-all active:scale-95">
                 <MicrosoftIcon className="w-5 h-5" />
                 <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Microsoft</span>
               </button>
@@ -330,11 +515,13 @@ const App: React.FC = () => {
   // Main App Screen
   return (
     <div className="max-w-6xl mx-auto px-6 py-10 relative min-h-screen">
-      {isProcessingImage && (
+      {(isProcessingImage || isLoadingData) && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white p-8 rounded-[3rem] shadow-2xl flex flex-col items-center gap-4 animate-in zoom-in-95">
              <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: theme.primaryColor, borderTopColor: 'transparent' }} />
-             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">Otimizando Imagem...</span>
+             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">
+                {isLoadingData ? 'Sincronizando...' : 'Otimizando Imagem...'}
+             </span>
           </div>
         </div>
       )}
@@ -359,11 +546,11 @@ const App: React.FC = () => {
                 <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Conta Conectada</p>
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center text-gray-500">
-                    {authData?.provider === 'google' ? <GoogleIcon className="w-6 h-6" /> : authData?.provider === 'microsoft' ? <MicrosoftIcon className="w-6 h-6" /> : <UserIcon className="w-6 h-6" style={{ color: theme.primaryColor }} />}
+                    <UserIcon className="w-6 h-6" style={{ color: theme.primaryColor }} />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm font-bold text-gray-800">{authData?.email}</span>
-                    <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest mt-0.5">Provedor: {authData?.provider}</span>
+                    <span className="text-sm font-bold text-gray-800 break-all">{session.user.email}</span>
+                    <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest mt-0.5">Provedor: {session.user.app_metadata.provider || 'Local'}</span>
                   </div>
                 </div>
               </div>
@@ -376,12 +563,12 @@ const App: React.FC = () => {
                       type="text" 
                       placeholder="Título" 
                       value={theme.portalTitle} 
-                      onChange={e => setTheme({ ...theme, portalTitle: e.target.value })} 
+                      onChange={e => handleThemeChange({ ...theme, portalTitle: e.target.value })} 
                       className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-5 pr-16 font-bold outline-none focus:bg-white focus:border-[var(--secondary)] transition-all text-gray-800 placeholder:text-gray-300" 
                     />
                     <div className="absolute right-4 top-1/2 -translate-y-1/2">
                       <div className="relative w-10 h-10 rounded-xl overflow-hidden border-2 border-white shadow-md ring-1 ring-gray-100 group cursor-pointer transition-transform hover:scale-105">
-                        <input type="color" value={theme.portalTitleColor} onChange={e => setTheme({ ...theme, portalTitleColor: e.target.value })} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                        <input type="color" value={theme.portalTitleColor} onChange={e => handleThemeChange({ ...theme, portalTitleColor: e.target.value })} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                         <div className="w-full h-full" style={{ backgroundColor: theme.portalTitleColor }} />
                       </div>
                     </div>
@@ -392,12 +579,12 @@ const App: React.FC = () => {
                       type="text" 
                       placeholder="Subtítulo" 
                       value={theme.portalSubtitle} 
-                      onChange={e => setTheme({ ...theme, portalSubtitle: e.target.value })} 
+                      onChange={e => handleThemeChange({ ...theme, portalSubtitle: e.target.value })} 
                       className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-5 pr-16 font-bold outline-none focus:bg-white focus:border-[var(--secondary)] transition-all text-gray-800 placeholder:text-gray-300" 
                     />
                     <div className="absolute right-4 top-1/2 -translate-y-1/2">
                       <div className="relative w-10 h-10 rounded-xl overflow-hidden border-2 border-white shadow-md ring-1 ring-gray-100 group cursor-pointer transition-transform hover:scale-105">
-                        <input type="color" value={theme.portalSubtitleColor} onChange={e => setTheme({ ...theme, portalSubtitleColor: e.target.value })} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                        <input type="color" value={theme.portalSubtitleColor} onChange={e => handleThemeChange({ ...theme, portalSubtitleColor: e.target.value })} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                         <div className="w-full h-full" style={{ backgroundColor: theme.portalSubtitleColor }} />
                       </div>
                     </div>
@@ -411,7 +598,7 @@ const App: React.FC = () => {
                   type="text" 
                   placeholder="URL da Imagem de Fundo (https://...)" 
                   value={theme.backgroundImage} 
-                  onChange={e => setTheme({ ...theme, backgroundImage: e.target.value })} 
+                  onChange={e => handleThemeChange({ ...theme, backgroundImage: e.target.value })} 
                   className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-5 font-bold outline-none focus:bg-white focus:border-[var(--secondary)] transition-all text-gray-800 placeholder:text-gray-300" 
                 />
               </div>
@@ -420,7 +607,7 @@ const App: React.FC = () => {
                 <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest block mb-6">Paletas</label>
                 <div className="grid grid-cols-2 gap-3">
                   {PALETTES.map(p => (
-                    <button key={p.name} onClick={() => setTheme({ ...theme, primaryColor: p.primary, secondaryColor: p.secondary, bgGradientStart: p.start, bgGradientEnd: p.end, actionButtonColor: p.primary })} className="group relative">
+                    <button key={p.name} onClick={() => handleThemeChange({ ...theme, primaryColor: p.primary, secondaryColor: p.secondary, bgGradientStart: p.start, bgGradientEnd: p.end, actionButtonColor: p.primary })} className="group relative">
                       <div className={`w-full h-14 rounded-2xl transition-all shadow-sm border-4 ${theme.primaryColor === p.primary ? 'scale-[1.02] ring-4' : 'border-white hover:scale-[1.02]'}`} style={{ background: p.primary, borderColor: theme.primaryColor === p.primary ? p.primary : 'white', boxShadow: theme.primaryColor === p.primary ? `0 0 0 2px ${p.secondary}` : 'none' }} /> 
                     </button>
                   ))}
@@ -433,7 +620,7 @@ const App: React.FC = () => {
                   {ANIMATIONS.map(anim => (
                     <button 
                       key={anim.id}
-                      onClick={() => setTheme({ ...theme, objectAnimation: anim.id })}
+                      onClick={() => handleThemeChange({ ...theme, objectAnimation: anim.id })}
                       className={`py-3 px-4 rounded-xl text-xs font-bold transition-all border-2 ${
                         theme.objectAnimation === anim.id 
                           ? 'bg-pink-50 border-pink-500 text-pink-500' 
@@ -447,7 +634,6 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
-            <button onClick={() => { if(confirm('Resetar dados?')) { localStorage.clear(); window.location.reload(); } }} className="mt-16 w-full py-5 text-[11px] font-black text-rose-500 bg-rose-50 rounded-[2rem] uppercase tracking-widest hover:bg-rose-100 transition-colors">Zerar Dados</button>
           </div>
         </div>
       )}
@@ -470,7 +656,13 @@ const App: React.FC = () => {
 
       {viewMode === 'checklist' ? (
         <div className="animate-in fade-in slide-in-from-bottom-6 duration-1000">
-          <StatsBoard items={items} budgetLevels={budgetLevels} onUpdateLevels={setBudgetLevels} initialSavings={initialSavings} onUpdateInitialSavings={setInitialSavings} />
+          <StatsBoard 
+            items={items} 
+            budgetLevels={budgetLevels} 
+            onUpdateLevels={handleLevelsChange} 
+            initialSavings={initialSavings} 
+            onUpdateInitialSavings={handleSavingsChange} 
+          />
           
           <div className="flex flex-col sm:flex-row gap-4 justify-between items-center mb-12">
             <div className="flex items-center gap-2 bg-white/90 backdrop-blur-md rounded-[2.5rem] p-2 shadow-xl border border-white">
@@ -562,10 +754,10 @@ const App: React.FC = () => {
           )}
         </div>
       ) : (
-        <CalendarView events={events} onAddEvent={e => setEvents(prev => [...prev, e])} onDeleteEvent={id => setEvents(prev => prev.filter(e => e.id !== id))} />
+        <CalendarView events={events} onAddEvent={addEvent} onDeleteEvent={deleteEvent} />
       )}
 
-      <ConfirmationModal isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={() => { setItems(prev => prev.filter(i => i.id !== itemToDelete!.id)); setItemToDelete(null); }} itemTitle={itemToDelete?.title || ''} />
+      <ConfirmationModal isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={deleteItem} itemTitle={itemToDelete?.title || ''} />
       
       <footer className="mt-32 text-center pb-20 opacity-20 text-[11px] font-black uppercase tracking-[0.4em]">
         Portal de Sonhos &bull; {new Date().getFullYear()}
