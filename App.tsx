@@ -6,7 +6,7 @@ import ChecklistItemListRow from './components/ChecklistItemListRow';
 import StatsBoard from './components/StatsBoard';
 import CalendarView from './components/CalendarView';
 import ConfirmationModal from './components/ConfirmationModal';
-import { HeartIcon, GearIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon, UploadIcon, TrashIcon } from './components/Icons';
+import { HeartIcon, GearIcon, SlidersIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon, UploadIcon, TrashIcon } from './components/Icons';
 import { resizeImage, uploadToSupabase } from './utils';
 import { supabase } from './supabaseClient';
 
@@ -343,9 +343,16 @@ const App: React.FC = () => {
 
   const handleSocialAuth = async (provider: 'google' | 'azure') => {
     setIsAuthenticating(true);
-    const { error } = await supabase.auth.signInWithOAuth({ provider });
-    if (error) {
-      setAuthError(error.message);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({ 
+        provider,
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+    } catch (error: any) {
+      setAuthError(error.message || 'Erro ao conectar com provedor social.');
       setIsAuthenticating(false);
     }
   };
@@ -628,7 +635,7 @@ const App: React.FC = () => {
       )}
 
       <button onClick={() => setIsSettingsVisible(true)} className="fixed top-8 right-8 z-40 p-4 bg-white/90 backdrop-blur-md shadow-2xl rounded-full hover:scale-110 transition-transform border border-white">
-        <GearIcon className="w-6 h-6" style={{ color: theme.primaryColor }} />
+        <SlidersIcon className="w-6 h-6" style={{ color: theme.primaryColor }} />
       </button>
 
       {isSettingsVisible && (
@@ -655,7 +662,7 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
-
+              
               <div className="space-y-4">
                 <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest block mb-4">Cabeçalho</label>
                 <div className="space-y-4">

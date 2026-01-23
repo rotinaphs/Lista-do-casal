@@ -26,7 +26,21 @@ export const PlusIcon = ({ className, style }: IconProps) => (
 );
 
 export const GearIcon = ({ className, style }: IconProps) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} style={style} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2v-.44a2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} style={style} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 0-2-2v-.44a2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+);
+
+export const SlidersIcon = ({ className, style }: IconProps) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} style={style} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="21" y1="4" x2="14" y2="4" />
+    <line x1="10" y1="4" x2="3" y2="4" />
+    <line x1="21" y1="12" x2="12" y2="12" />
+    <line x1="8" y1="12" x2="3" y2="12" />
+    <line x1="21" y1="20" x2="16" y2="20" />
+    <line x1="12" y1="20" x2="3" y2="20" />
+    <line x1="14" y1="2" x2="14" y2="6" />
+    <line x1="8" y1="10" x2="8" y2="14" />
+    <line x1="16" y1="18" x2="16" y2="22" />
+  </svg>
 );
 
 export const ImageIcon = ({ className, style }: IconProps) => (
@@ -74,7 +88,12 @@ export const GoogleIcon = ({ className, style }: IconProps) => (
 );
 
 export const MicrosoftIcon = ({ className, style }: IconProps) => (
-  <svg className={className} style={style} viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg"><path fill="#f3f3f3" d="M0 0h23v23H0z"/><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>
+  <svg className={className} style={style} viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg">
+    <path fill="#f35325" d="M1 1h10v10H1z"/>
+    <path fill="#81bc06" d="M12 1h10v10H12z"/>
+    <path fill="#05a6f0" d="M1 12h10v10H1z"/>
+    <path fill="#ffba08" d="M12 12h10v10H12z"/>
+  </svg>
 );
 
 export const ChevronLeftIcon = ({ className, style }: IconProps) => (
