@@ -3,6 +3,7 @@ import React, { useRef, useState, memo, useCallback, useEffect } from 'react';
 import { ChecklistItem, ItemStatus } from '../types';
 import { TrashIcon, CheckIcon, PencilIcon, ImageIcon, CropIcon, RefreshIcon, ExternalLinkIcon } from './Icons';
 import StatusBadge from './StatusBadge';
+import ConfirmationModal from './ConfirmationModal';
 import { resizeImage, uploadToSupabase } from '../utils';
 import { supabase } from '../supabaseClient';
 
@@ -27,6 +28,7 @@ const ChecklistItemCard: React.FC<ChecklistItemCardProps> = memo(({ item, onUpda
   const [isAdjusting, setIsAdjusting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDeleteImageModalOpen, setIsDeleteImageModalOpen] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, initialX: 50, initialY: 50 });
   const [editValues, setEditValues] = useState({ title, price: price.toString(), link: link || '' });
 
@@ -108,6 +110,18 @@ const ChecklistItemCard: React.FC<ChecklistItemCardProps> = memo(({ item, onUpda
 
   const resetImageAjusts = () => onUpdateItem(id, { imageScale: 1, imagePositionX: 50, imagePositionY: 50, imageFit: 'cover' });
 
+  const handleRemoveImage = () => {
+    onUpdateItem(id, { 
+        image: null as any, 
+        imageScale: 1, 
+        imagePositionX: 50, 
+        imagePositionY: 50,
+        imageFit: 'cover'
+    });
+    setIsDeleteImageModalOpen(false);
+    setIsAdjusting(false);
+  };
+
   return (
     <div className={`group relative rounded-[3.5rem] transition-all duration-700 overflow-hidden border-4 border-white shadow-[0_20px_60px_rgba(0,0,0,0.05)] hover:shadow-[0_40px_100px_rgba(0,0,0,0.1)] hover:-translate-y-2
       ${isDone ? 'bg-green-50/20' : 'bg-white/90 backdrop-blur-sm'}`}>
@@ -121,13 +135,16 @@ const ChecklistItemCard: React.FC<ChecklistItemCardProps> = memo(({ item, onUpda
       {/* Imagem / Área de Drop */}
       <div 
         ref={imageContainerRef}
-        className={`w-full h-80 overflow-hidden relative bg-gray-50/50 ${isAdjusting ? 'cursor-move ring-inset ring-8 ring-[var(--secondary)]' : ''}`}
+        className={`w-full h-80 overflow-hidden relative bg-gray-50/50 ${isAdjusting ? 'cursor-move ring-inset ring-8 ring-[var(--secondary)] touch-none' : ''}`}
         onMouseDown={(e) => handleDragStart(e.clientX, e.clientY)}
         onMouseMove={(e) => handleDragMove(e.clientX, e.clientY)}
         onMouseUp={() => setIsDragging(false)}
         onMouseLeave={() => setIsDragging(false)}
         onTouchStart={(e) => handleDragStart(e.touches[0].clientX, e.touches[0].clientY)}
-        onTouchMove={(e) => handleDragMove(e.touches[0].clientX, e.touches[0].clientY)}
+        onTouchMove={(e) => {
+          if (isAdjusting) e.preventDefault();
+          handleDragMove(e.touches[0].clientX, e.touches[0].clientY);
+        }}
         onTouchEnd={() => setIsDragging(false)}
       >
         {image ? (
@@ -150,26 +167,35 @@ const ChecklistItemCard: React.FC<ChecklistItemCardProps> = memo(({ item, onUpda
 
         {/* Controles de Ajuste de Imagem */}
         {isAdjusting && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-white/95 backdrop-blur-xl px-6 py-3 rounded-full shadow-2xl border border-gray-100 animate-in slide-in-from-bottom-4 duration-300 z-30">
-            <div className="flex items-center gap-3">
-              <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Zoom</span>
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[95%] max-w-[340px] flex items-center justify-between gap-2 bg-white/95 backdrop-blur-xl px-3 py-2 rounded-full shadow-2xl border border-gray-100 animate-in slide-in-from-bottom-4 duration-300 z-30">
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest hidden xs:block">Zoom</span>
               <input 
                 type="range" min="0.5" max="5" step="0.05" value={imageScale} 
                 onChange={(e) => onUpdateItem(id, { imageScale: parseFloat(e.target.value) })}
-                className="w-24 h-1.5 bg-gray-100 rounded-full appearance-none cursor-pointer accent-[var(--primary)]"
+                className="w-full h-1.5 bg-gray-100 rounded-full appearance-none cursor-pointer accent-[var(--primary)]"
               />
             </div>
-            <div className="h-4 w-px bg-gray-200" />
+            <div className="h-4 w-px bg-gray-200 flex-shrink-0" />
             <button 
               onClick={(e) => { e.stopPropagation(); onUpdateItem(id, { imageFit: imageFit === 'cover' ? 'contain' : 'cover' }); }}
-              className={`text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-lg transition-colors ${imageFit === 'contain' ? 'bg-[var(--secondary)] text-[var(--primary)]' : 'bg-gray-100 text-gray-500'}`}
+              className={`text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 ${imageFit === 'contain' ? 'bg-[var(--secondary)] text-[var(--primary)]' : 'bg-gray-100 text-gray-500'}`}
             >
               {imageFit === 'cover' ? 'Cortar' : 'Ajustar'}
             </button>
-            <button onClick={(e) => { e.stopPropagation(); resetImageAjusts(); }} className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-lg text-gray-500 hover:bg-gray-100">
-              <RefreshIcon className="w-3 h-3" />
+            <button onClick={(e) => { e.stopPropagation(); resetImageAjusts(); }} className="flex items-center justify-center w-8 h-8 rounded-full text-gray-400 hover:bg-gray-100 transition-colors flex-shrink-0">
+              <RefreshIcon className="w-3.5 h-3.5" />
             </button>
-            <button onClick={(e) => { e.stopPropagation(); setIsAdjusting(false); }} className="text-[9px] font-black uppercase tracking-widest bg-gray-900 text-white px-4 py-1.5 rounded-full">Ok</button>
+            
+            <button 
+                onClick={(e) => { e.stopPropagation(); setIsDeleteImageModalOpen(true); }} 
+                className="flex items-center justify-center w-8 h-8 rounded-full text-red-300 hover:bg-red-50 hover:text-red-500 transition-colors flex-shrink-0"
+                title="Remover Imagem"
+            >
+              <TrashIcon className="w-3.5 h-3.5" />
+            </button>
+
+            <button onClick={(e) => { e.stopPropagation(); setIsAdjusting(false); }} className="text-[9px] font-black uppercase tracking-widest bg-gray-900 text-white px-4 py-1.5 rounded-full flex-shrink-0">Ok</button>
           </div>
         )}
 
@@ -221,6 +247,16 @@ const ChecklistItemCard: React.FC<ChecklistItemCardProps> = memo(({ item, onUpda
           <CheckIcon className="w-10 h-10 text-white" pathClassName="animate-check-draw" />
         </div>
       )}
+
+      <ConfirmationModal 
+        isOpen={isDeleteImageModalOpen}
+        onClose={() => setIsDeleteImageModalOpen(false)}
+        onConfirm={handleRemoveImage}
+        title="Remover Imagem?"
+        description="A imagem será removida deste sonho. Você poderá adicionar outra depois."
+        confirmLabel="Remover Imagem"
+        isDanger={true}
+      />
     </div>
   );
 });

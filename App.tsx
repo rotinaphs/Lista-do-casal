@@ -6,7 +6,7 @@ import ChecklistItemListRow from './components/ChecklistItemListRow';
 import StatsBoard from './components/StatsBoard';
 import CalendarView from './components/CalendarView';
 import ConfirmationModal from './components/ConfirmationModal';
-import { HeartIcon, GearIcon, SlidersIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon, UploadIcon, TrashIcon } from './components/Icons';
+import { HeartIcon, GearIcon, SlidersIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon, UploadIcon, TrashIcon, ChevronLeftIcon } from './components/Icons';
 import { resizeImage, uploadToSupabase } from './utils';
 import { supabase } from './supabaseClient';
 
@@ -94,7 +94,9 @@ const App: React.FC = () => {
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [isSettingsVisible, setIsSettingsVisible] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<ChecklistItem | null>(null);
+  const [isDeleteAccountModalOpen, setIsDeleteAccountModalOpen] = useState(false);
   const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   const [formData, setFormData] = useState({
     title: '', price: '', link: '', image: undefined as string | undefined, 
@@ -341,24 +343,52 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSocialAuth = async (provider: 'google' | 'azure') => {
-    setIsAuthenticating(true);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({ 
-        provider,
-        options: {
-          redirectTo: window.location.origin
-        }
-      });
-      if (error) throw error;
-    } catch (error: any) {
-      setAuthError(error.message || 'Erro ao conectar com provedor social.');
-      setIsAuthenticating(false);
-    }
-  };
-
   const handleLogout = async () => {
     await supabase.auth.signOut();
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!session) return;
+    setIsDeletingAccount(true);
+
+    try {
+        const userId = session.user.id;
+
+        // 1. Limpar Arquivos do Storage
+        // Como o Supabase não tem "delete folder", listamos e deletamos os arquivos
+        const folders = ['items', 'portal'];
+        for (const folder of folders) {
+             const { data: files } = await supabase.storage.from('couple_assets').list(`${userId}/${folder}`);
+             if (files && files.length > 0) {
+                 const filesToRemove = files.map(f => `${userId}/${folder}/${f.name}`);
+                 await supabase.storage.from('couple_assets').remove(filesToRemove);
+             }
+        }
+        
+        // 2. Limpar Dados do Banco
+        // A ordem pode importar dependendo das foreign keys, mas se estiver cascade no Supabase, deletar profile basta.
+        // Por segurança, deletamos tudo manualmente.
+        await supabase.from('checklist_items').delete().eq('user_id', userId);
+        await supabase.from('calendar_events').delete().eq('user_id', userId);
+        
+        // Deletar o perfil (Gatilho principal)
+        const { error: profileError } = await supabase.from('profiles').delete().eq('id', userId);
+        if (profileError) throw profileError;
+
+        // 3. Logout (O usuário Auth ainda existe no Supabase a menos que seja deletado via Edge Function/Admin API, 
+        // mas para a aplicação ele deixa de existir pois os dados foram apagados).
+        await supabase.auth.signOut();
+        
+        setIsSettingsVisible(false);
+        setIsDeleteAccountModalOpen(false);
+        window.location.reload();
+
+    } catch (error: any) {
+        console.error('Erro ao excluir conta:', error);
+        alert('Ocorreu um erro ao excluir os dados. Tente novamente.');
+    } finally {
+        setIsDeletingAccount(false);
+    }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -576,7 +606,7 @@ const App: React.FC = () => {
             </div>
           </header>
 
-          <form onSubmit={handleAuth} className="space-y-4">
+          <form onSubmit={handleAuth} className="space-y-4 mb-8">
             <div className="relative group">
               <UserIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 group-focus-within:text-pink-400 transition-colors" />
               <input required type="email" placeholder="E-mail" value={fields.email} onChange={e => setFields({...fields, email: e.target.value})} className="w-full bg-white border-2 border-transparent rounded-[1.5rem] p-5 pl-14 font-bold outline-none focus:border-pink-200 focus:shadow-lg transition-all" />
@@ -597,25 +627,6 @@ const App: React.FC = () => {
               {authView === 'login' ? 'Acessar Sonhos' : 'Começar Jornada'}
             </button>
           </form>
-
-          <div className="mt-8">
-            <div className="flex items-center gap-4 mb-8">
-              <div className="h-px bg-gray-200 flex-1" />
-              <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Ou acesse com</span>
-              <div className="h-px bg-gray-200 flex-1" />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <button onClick={() => handleSocialAuth('google')} className="flex items-center justify-center gap-3 py-4 bg-white border-2 border-gray-50 rounded-2xl hover:border-pink-100 hover:shadow-md transition-all active:scale-95">
-                <GoogleIcon className="w-5 h-5" />
-                <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Google</span>
-              </button>
-              <button onClick={() => handleSocialAuth('azure')} className="flex items-center justify-center gap-3 py-4 bg-white border-2 border-gray-50 rounded-2xl hover:border-blue-100 hover:shadow-md transition-all active:scale-95">
-                <MicrosoftIcon className="w-5 h-5" />
-                <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Microsoft</span>
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -623,12 +634,12 @@ const App: React.FC = () => {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10 relative min-h-screen">
-      {(isProcessingImage || isLoadingData) && (
+      {(isProcessingImage || isLoadingData || isDeletingAccount) && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white p-8 rounded-[3rem] shadow-2xl flex flex-col items-center gap-4 animate-in zoom-in-95">
              <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: theme.primaryColor, borderTopColor: 'transparent' }} />
              <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">
-                {isLoadingData ? 'Sincronizando...' : 'Otimizando Imagem...'}
+                {isDeletingAccount ? 'Excluindo dados...' : (isLoadingData ? 'Sincronizando...' : 'Otimizando Imagem...')}
              </span>
           </div>
         </div>
@@ -641,15 +652,23 @@ const App: React.FC = () => {
       {isSettingsVisible && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setIsSettingsVisible(false)} />
-          <div className="relative w-96 bg-white h-full p-8 sm:p-10 shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-300">
-            <div className="flex justify-between items-center mb-10">
-              <h2 className="text-3xl font-black text-gray-800">Ajustes</h2>
+          <div className="relative w-full sm:w-96 bg-white h-full p-6 sm:p-10 shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-300">
+            <div className="flex justify-between items-center mb-8 sm:mb-10">
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => setIsSettingsVisible(false)}
+                  className="p-2 -ml-2 rounded-full hover:bg-gray-50 text-gray-400 sm:hidden transition-all"
+                >
+                  <ChevronLeftIcon className="w-6 h-6" />
+                </button>
+                <h2 className="text-2xl sm:text-3xl font-black text-gray-800">Ajustes</h2>
+              </div>
               <button onClick={handleLogout} className="p-3 bg-rose-50 text-rose-500 rounded-2xl hover:bg-rose-500 hover:text-white transition-all shadow-sm" title="Sair do Portal">
                 <LogOutIcon className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-10">
+            <div className="space-y-10 pb-20">
               <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-[0_4px_20px_rgba(0,0,0,0.03)] space-y-4">
                 <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest">Conta Conectada</p>
                 <div className="flex items-center gap-4">
@@ -773,6 +792,15 @@ const App: React.FC = () => {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="pt-8 border-t border-gray-100">
+                  <button 
+                    onClick={() => setIsDeleteAccountModalOpen(true)}
+                    className="w-full py-4 text-red-500 font-bold uppercase tracking-widest text-[10px] hover:bg-red-50 rounded-2xl transition-all"
+                  >
+                    Excluir minha conta
+                  </button>
               </div>
             </div>
           </div>
@@ -900,7 +928,19 @@ const App: React.FC = () => {
         <CalendarView events={events} onAddEvent={addEvent} onDeleteEvent={deleteEvent} />
       )}
 
+      {/* Modal para excluir item */}
       <ConfirmationModal isOpen={!!itemToDelete} onClose={() => setItemToDelete(null)} onConfirm={deleteItem} itemTitle={itemToDelete?.title || ''} />
+
+      {/* Modal para excluir conta */}
+      <ConfirmationModal 
+        isOpen={isDeleteAccountModalOpen} 
+        onClose={() => setIsDeleteAccountModalOpen(false)} 
+        onConfirm={handleDeleteAccount}
+        title="Excluir Conta Permanentemente?"
+        description="Esta ação removerá todos os seus sonhos, eventos e configurações. Não é possível desfazer."
+        confirmLabel="Sim, excluir tudo"
+        isDanger={true}
+      />
       
       <footer className="mt-32 text-center pb-20 opacity-20 text-[11px] font-black uppercase tracking-[0.4em]">
         Portal de Sonhos &bull; {new Date().getFullYear()}
