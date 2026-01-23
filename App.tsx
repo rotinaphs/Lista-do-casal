@@ -6,8 +6,8 @@ import ChecklistItemListRow from './components/ChecklistItemListRow';
 import StatsBoard from './components/StatsBoard';
 import CalendarView from './components/CalendarView';
 import ConfirmationModal from './components/ConfirmationModal';
-import { HeartIcon, GearIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon } from './components/Icons';
-import { resizeImage } from './utils';
+import { HeartIcon, GearIcon, LogOutIcon, UserIcon, GoogleIcon, MicrosoftIcon, ImageIcon, LayoutGridIcon, ListIcon, LockIcon, UploadIcon, TrashIcon } from './components/Icons';
+import { resizeImage, uploadToSupabase } from './utils';
 import { supabase } from './supabaseClient';
 
 const DEFAULT_THEME: AppTheme = {
@@ -47,7 +47,6 @@ const ANIMATIONS = [
   { id: 'none', name: 'Parado' },
 ];
 
-// Helpers para mapeamento seguro de dados do DB
 const mapDbItem = (i: any): ChecklistItem => ({
    id: i.id,
    title: i.title || 'Sem título',
@@ -55,7 +54,7 @@ const mapDbItem = (i: any): ChecklistItem => ({
    status: i.status || ItemStatus.PENDING,
    progress: Number(i.progress) || 0,
    link: i.link || '',
-   createdAt: i.created_at ? new Date(i.created_at).getTime() : Date.now(),
+   createdAt: i.created_at ? (typeof i.created_at === 'number' ? i.created_at : new Date(i.created_at).getTime()) : Date.now(),
    image: i.image || undefined,
    imageFit: i.image_fit || 'cover',
    imageScale: Number(i.image_scale) || 1,
@@ -71,14 +70,16 @@ const mapDbEvent = (e: any): CalendarEvent => ({
 });
 
 const App: React.FC = () => {
-  // Auth States
   const [session, setSession] = useState<any>(null);
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [fields, setFields] = useState({ email: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
 
-  // Main Data States
+  // Estados de inicialização e conexão
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [items, setItems] = useState<ChecklistItem[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -101,31 +102,56 @@ const App: React.FC = () => {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bgInputRef = useRef<HTMLInputElement>(null);
 
-  // Inicialização e Auth
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      if (session) fetchData(session.user.id, session.user.email);
+    let mounted = true;
+
+    const init = async () => {
+        try {
+            // Verifica sessão inicial
+            const { data, error } = await supabase.auth.getSession();
+            if (error) throw error;
+            
+            if (mounted) {
+                setSession(data.session);
+                // Se houver sessão, tenta buscar os dados. Se falhar, captura o erro para exibir tela de erro.
+                if (data.session) {
+                    await fetchData(data.session.user.id, data.session.user.email, true);
+                }
+            }
+        } catch (err: any) {
+            console.error('Erro de inicialização/conexão:', err);
+            if (mounted) {
+              setConnectionError(err.message || 'Falha ao conectar com o serviço.');
+            }
+        } finally {
+            if (mounted) setIsCheckingSession(false);
+        }
+    };
+
+    init();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (mounted) {
+            setSession(session);
+            if (session) {
+                // Em mudanças subsequentes, não tratamos o erro como crítico de "conexão inicial"
+                fetchData(session.user.id, session.user.email);
+            } else {
+                setItems([]);
+                setEvents([]);
+                setTheme(DEFAULT_THEME);
+            }
+        }
     });
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        fetchData(session.user.id, session.user.email);
-      } else {
-        setItems([]);
-        setEvents([]);
-        setTheme(DEFAULT_THEME);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+        mounted = false;
+        subscription.unsubscribe();
+    };
   }, []);
 
-  // Realtime Subscriptions
   useEffect(() => {
     if (!session) return;
 
@@ -134,7 +160,10 @@ const App: React.FC = () => {
         { event: '*', schema: 'public', table: 'checklist_items', filter: `user_id=eq.${session.user.id}` }, 
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            setItems(prev => [mapDbItem(payload.new), ...prev]);
+            setItems(prev => {
+               if (prev.some(p => p.id === payload.new.id)) return prev;
+               return [mapDbItem(payload.new), ...prev];
+            });
           } else if (payload.eventType === 'UPDATE') {
             setItems(prev => prev.map(i => i.id === payload.new.id ? mapDbItem(payload.new) : i));
           } else if (payload.eventType === 'DELETE') {
@@ -156,7 +185,7 @@ const App: React.FC = () => {
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${session.user.id}` },
         (payload) => {
           const newProfile = payload.new;
-          if (newProfile.theme) setTheme(newProfile.theme);
+          if (newProfile.theme) setTheme(prev => ({ ...prev, ...newProfile.theme }));
           if (newProfile.budget_levels) setBudgetLevels(newProfile.budget_levels);
           if (newProfile.initial_savings !== null) setInitialSavings(Number(newProfile.initial_savings));
         }
@@ -168,14 +197,11 @@ const App: React.FC = () => {
     };
   }, [session]);
 
-  // Fetch Data com criação lazy de perfil
-  const fetchData = async (userId: string, userEmail?: string) => {
+  const fetchData = async (userId: string, userEmail?: string, isInitialLoad = false) => {
     setIsLoadingData(true);
     try {
-      // 1. Perfis
       let { data: profile, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
       
-      // Se não existir perfil, cria um padrão (Lazy Creation)
       if (error && (error.code === 'PGRST116' || error.message.includes('JSON'))) {
          const { data: newProfile, error: createError } = await supabase.from('profiles').insert({
            id: userId,
@@ -187,35 +213,54 @@ const App: React.FC = () => {
          
          if (!createError) {
            profile = newProfile;
+         } else {
+           throw createError; // Lança erro se falhar ao criar perfil
          }
+      } else if (error) {
+        throw error; // Lança erro de busca de perfil
       }
 
       if (profile) {
-        if (profile.theme && Object.keys(profile.theme).length > 0) setTheme(profile.theme);
-        if (profile.budget_levels && Array.isArray(profile.budget_levels) && profile.budget_levels.length > 0) setBudgetLevels(profile.budget_levels);
-        if (profile.initial_savings !== null) setInitialSavings(Number(profile.initial_savings));
+        if (profile.theme && Object.keys(profile.theme).length > 0) {
+          setTheme(prev => ({ ...prev, ...profile.theme }));
+        }
+        if (profile.budget_levels && Array.isArray(profile.budget_levels) && profile.budget_levels.length > 0) {
+          setBudgetLevels(profile.budget_levels);
+        }
+        if (profile.initial_savings !== null) {
+          setInitialSavings(Number(profile.initial_savings));
+        }
       }
 
-      // 2. Itens
-      const { data: dbItems } = await supabase.from('checklist_items').select('*').order('created_at', { ascending: false });
+      const { data: dbItems, error: itemsError } = await supabase.from('checklist_items')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+        
+      if (itemsError) throw itemsError;
+
       if (dbItems) {
         setItems(dbItems.map(mapDbItem));
       }
 
-      // 3. Eventos
-      const { data: dbEvents } = await supabase.from('calendar_events').select('*');
+      const { data: dbEvents, error: eventsError } = await supabase.from('calendar_events')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (eventsError) throw eventsError;
+
       if (dbEvents) {
         setEvents(dbEvents.map(mapDbEvent));
       }
 
     } catch (error) {
       console.error('Error fetching data:', error);
+      if (isInitialLoad) throw error; // Repassa o erro para o init tratar
     } finally {
       setIsLoadingData(false);
     }
   };
 
-  // Efeito para aplicar tema (CSS Variables)
   useEffect(() => {
     const root = document.documentElement;
     root.style.setProperty('--primary', theme.primaryColor);
@@ -235,18 +280,17 @@ const App: React.FC = () => {
     }
   }, [theme]);
 
-  // Sync Data Updates
+  // Resto das funções mantidas sem alterações
   const updateProfileData = async (updates: any) => {
     if (!session) return;
-    // Otimização: Não precisamos atualizar o estado local aqui se o Realtime estiver ativo,
-    // mas mantemos para garantir responsividade instantânea na UI do próprio usuário
     try {
-      await supabase.from('profiles').upsert({
+      const { error } = await supabase.from('profiles').upsert({
         id: session.user.id,
         email: session.user.email,
-        updated_at: new Date(),
         ...updates
       }, { onConflict: 'id' });
+      
+      if (error) throw error;
     } catch (error) {
       console.error('Error updating profile:', error);
     }
@@ -267,8 +311,6 @@ const App: React.FC = () => {
     updateProfileData({ budget_levels: newLevels });
   };
 
-
-  // Auth Handlers
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
@@ -276,18 +318,14 @@ const App: React.FC = () => {
 
     try {
       if (authView === 'signup') {
-        if (!fields.email || !fields.password) {
-           throw new Error('Preencha todos os campos.');
-        }
-        if (fields.password !== fields.confirmPassword) {
-           throw new Error('As senhas não coincidem.');
-        }
+        if (!fields.email || !fields.password) throw new Error('Preencha todos os campos.');
+        if (fields.password !== fields.confirmPassword) throw new Error('As senhas não coincidem.');
         const { error } = await supabase.auth.signUp({
           email: fields.email,
           password: fields.password,
         });
         if (error) throw error;
-        alert('Conta criada! Verifique seu e-mail ou faça login (se o auto-confirm estiver ativo).');
+        alert('Conta criada! Verifique seu e-mail.');
         setAuthView('login');
       } else {
         const { error } = await supabase.auth.signInWithPassword({
@@ -305,9 +343,7 @@ const App: React.FC = () => {
 
   const handleSocialAuth = async (provider: 'google' | 'azure') => {
     setIsAuthenticating(true);
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: provider,
-    });
+    const { error } = await supabase.auth.signInWithOAuth({ provider });
     if (error) {
       setAuthError(error.message);
       setIsAuthenticating(false);
@@ -318,7 +354,6 @@ const App: React.FC = () => {
     await supabase.auth.signOut();
   };
 
-  // Checklist Handlers
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -338,29 +373,58 @@ const App: React.FC = () => {
     }
   };
 
+  const handlePortalBgChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && session) {
+      setIsProcessingImage(true);
+      try {
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            const resized = await resizeImage(reader.result as string);
+            const publicUrl = await uploadToSupabase(session.user.id, 'portal', resized);
+            handleThemeChange({ ...theme, backgroundImage: publicUrl });
+          } catch (err) {
+            console.error('Erro ao subir fundo do portal:', err);
+          } finally {
+            setIsProcessingImage(false);
+          }
+        };
+        reader.readAsDataURL(file);
+      } catch (err) {
+        console.error('Erro ao ler arquivo:', err);
+        setIsProcessingImage(false);
+      }
+    }
+  };
+
   const addItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title.trim() || !session) return;
 
-    // Optimistic UI: Add immediately to state (will be deduped by Realtime or replaced)
-    // Actually, safer to wait for DB confirmation to avoid ID collision or double entry with Realtime
-    
-    const newItemData = {
-      user_id: session.user.id,
-      title: formData.title.trim(), 
-      price: parseFloat(formData.price) || 0, 
-      link: formData.link.trim(),
-      status: ItemStatus.PENDING, 
-      progress: 0,
-      created_at: Date.now(), 
-      image: formData.image,
-      image_fit: formData.fit, 
-      image_scale: formData.scale, 
-      image_position_x: formData.x, 
-      image_position_y: formData.y
-    };
-
+    setIsProcessingImage(true);
     try {
+      let finalImageUrl = formData.image;
+      
+      if (formData.image && formData.image.startsWith('data:image')) {
+        finalImageUrl = await uploadToSupabase(session.user.id, 'items', formData.image);
+      }
+
+      const newItemData = {
+        user_id: session.user.id,
+        title: formData.title.trim(), 
+        price: parseFloat(formData.price) || 0, 
+        link: formData.link.trim(),
+        status: ItemStatus.PENDING, 
+        progress: 0,
+        created_at: Date.now(),
+        image: finalImageUrl,
+        image_fit: formData.fit, 
+        image_scale: formData.scale, 
+        image_position_x: formData.x, 
+        image_position_y: formData.y
+      };
+
       const { error } = await supabase.from('checklist_items').insert(newItemData);
       if (error) throw error;
       
@@ -369,14 +433,15 @@ const App: React.FC = () => {
     } catch (error) {
       console.error('Error adding item:', error);
       alert('Erro ao salvar item.');
+    } finally {
+      setIsProcessingImage(false);
     }
   };
 
   const updateItem = useCallback(async (id: string, updates: Partial<ChecklistItem>) => {
-    // Optimistic Update
+    if (!session) return;
     setItems(prev => prev.map(i => i.id === id ? { ...i, ...updates } : i));
 
-    // Map camelCase to snake_case for DB
     const dbUpdates: any = {};
     if (updates.title !== undefined) dbUpdates.title = updates.title;
     if (updates.price !== undefined) dbUpdates.price = updates.price;
@@ -390,28 +455,31 @@ const App: React.FC = () => {
     if (updates.imagePositionY !== undefined) dbUpdates.image_position_y = updates.imagePositionY;
 
     try {
-      await supabase.from('checklist_items').update(dbUpdates).eq('id', id);
+      await supabase.from('checklist_items')
+        .update(dbUpdates)
+        .eq('id', id)
+        .eq('user_id', session.user.id);
     } catch (error) {
       console.error('Error updating item:', error);
     }
-  }, []);
+  }, [session]);
 
   const deleteItem = async () => {
-    if (!itemToDelete) return;
+    if (!itemToDelete || !session) return;
     const id = itemToDelete.id;
-    
-    // We can rely on Realtime to remove it from UI, but optimistic feels faster
     setItems(prev => prev.filter(i => i.id !== id));
     setItemToDelete(null);
 
     try {
-      await supabase.from('checklist_items').delete().eq('id', id);
+      await supabase.from('checklist_items')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', session.user.id);
     } catch (error) {
       console.error('Error deleting item:', error);
     }
   };
 
-  // Calendar Handlers
   const addEvent = async (event: CalendarEvent) => {
     if(!session) return;
     try {
@@ -427,9 +495,13 @@ const App: React.FC = () => {
   };
 
   const deleteEvent = async (id: string) => {
+    if (!session) return;
     setEvents(prev => prev.filter(e => e.id !== id));
     try {
-        await supabase.from('calendar_events').delete().eq('id', id);
+        await supabase.from('calendar_events')
+          .delete()
+          .eq('id', id)
+          .eq('user_id', session.user.id);
     } catch (e) {
         console.error('Error deleting event', e);
     }
@@ -444,7 +516,37 @@ const App: React.FC = () => {
     });
   }, [items, sortBy]);
 
-  // Auth Screens
+  // Exibição de Loading Inicial
+  if (isCheckingSession) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-pink-50">
+        <div className="w-16 h-16 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-pink-500 font-bold uppercase tracking-widest text-xs">Carregando Portal...</p>
+      </div>
+    );
+  }
+
+  // Exibição de Erro de Conexão
+  if (connectionError) {
+    return (
+       <div className="min-h-screen flex items-center justify-center bg-red-50 p-6">
+         <div className="bg-white p-10 rounded-[2rem] shadow-xl max-w-md w-full text-center border-2 border-red-100">
+            <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                <TrashIcon className="w-10 h-10" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-800 mb-2">Erro de Conexão</h2>
+            <p className="text-gray-500 mb-8 text-sm leading-relaxed">{connectionError}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="w-full py-4 bg-red-500 text-white rounded-xl font-bold uppercase tracking-widest hover:bg-red-600 transition-colors shadow-lg shadow-red-200"
+            >
+              Tentar Novamente
+            </button>
+         </div>
+       </div>
+    );
+  }
+
   if (!session) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center p-6 bg-cover bg-center" style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.3)), url(${DEFAULT_THEME.backgroundImage})` }}>
@@ -512,7 +614,6 @@ const App: React.FC = () => {
     );
   }
 
-  // Main App Screen
   return (
     <div className="max-w-6xl mx-auto px-6 py-10 relative min-h-screen">
       {(isProcessingImage || isLoadingData) && (
@@ -594,13 +695,46 @@ const App: React.FC = () => {
 
               <div>
                 <label className="text-[11px] font-black text-gray-400 uppercase tracking-widest block mb-4">Plano de Fundo</label>
-                <input 
-                  type="text" 
-                  placeholder="URL da Imagem de Fundo (https://...)" 
-                  value={theme.backgroundImage} 
-                  onChange={e => handleThemeChange({ ...theme, backgroundImage: e.target.value })} 
-                  className="w-full bg-gray-50 border border-gray-100 rounded-2xl p-5 font-bold outline-none focus:bg-white focus:border-[var(--secondary)] transition-all text-gray-800 placeholder:text-gray-300" 
-                />
+                <div className="space-y-4">
+                  <div 
+                    className="relative w-full aspect-video rounded-3xl overflow-hidden bg-gray-100 border-2 border-dashed border-gray-200 flex items-center justify-center group cursor-pointer shadow-inner"
+                    onClick={() => bgInputRef.current?.click()}
+                  >
+                    {theme.backgroundImage ? (
+                      <>
+                        <img src={theme.backgroundImage} className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
+                           <UploadIcon className="w-8 h-8 text-white" />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center text-gray-300">
+                        <ImageIcon className="w-8 h-8 mx-auto mb-2" />
+                        <span className="text-[10px] font-black uppercase tracking-widest">Subir Foto</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="Ou cole a URL aqui..." 
+                      value={theme.backgroundImage} 
+                      onChange={e => handleThemeChange({ ...theme, backgroundImage: e.target.value })} 
+                      className="flex-1 bg-gray-50 border border-gray-100 rounded-2xl p-5 font-bold outline-none focus:bg-white focus:border-[var(--secondary)] transition-all text-gray-800 placeholder:text-gray-300" 
+                    />
+                    {theme.backgroundImage && (
+                      <button 
+                        onClick={() => handleThemeChange({ ...theme, backgroundImage: '' })}
+                        className="p-5 bg-rose-50 text-rose-500 rounded-2xl hover:bg-rose-500 hover:text-white transition-all shadow-sm"
+                        title="Remover imagem"
+                      >
+                        <TrashIcon className="w-5 h-5" />
+                      </button>
+                    )}
+                  </div>
+                  <input type="file" hidden ref={bgInputRef} onChange={handlePortalBgChange} accept="image/*" />
+                </div>
               </div>
 
               <div>
@@ -729,7 +863,9 @@ const App: React.FC = () => {
                   <input type="file" hidden ref={fileInputRef} onChange={handleFileChange} accept="image/*" />
                 </div>
               </div>
-              <button type="submit" disabled={isProcessingImage} className="w-full mt-12 py-7 bg-gray-900 text-white rounded-[3rem] font-black text-xl shadow-2xl hover:opacity-90 active:scale-[0.98] transition-all uppercase tracking-[0.3em] disabled:opacity-50">Salvar Sonho</button>
+              <button type="submit" disabled={isProcessingImage} className="w-full mt-12 py-7 bg-gray-900 text-white rounded-[3rem] font-black text-xl shadow-2xl hover:opacity-90 active:scale-[0.98] transition-all uppercase tracking-[0.3em] disabled:opacity-50">
+                {isProcessingImage ? 'Processando Sonho...' : 'Salvar Sonho'}
+              </button>
             </form>
           )}
 

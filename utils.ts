@@ -1,8 +1,9 @@
 
+import { supabase } from './supabaseClient';
+
 /**
- * Redimensiona e comprime uma imagem em base64 para caber no localStorage.
- * Mantém uma resolução de até 1280px (HD) para permitir zoom e pan nos cards
- * sem estourar o limite de 5MB do navegador.
+ * Redimensiona e comprime uma imagem.
+ * Retorna um Blob para upload ou Base64 para preview imediato.
  */
 export const resizeImage = (base64Str: string, maxWidth = 1280, maxHeight = 1280): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -13,7 +14,6 @@ export const resizeImage = (base64Str: string, maxWidth = 1280, maxHeight = 1280
       let width = img.width;
       let height = img.height;
 
-      // Cálculo de proporção para manter o aspect ratio
       if (width > height) {
         if (width > maxWidth) {
           height *= maxWidth / width;
@@ -35,10 +35,7 @@ export const resizeImage = (base64Str: string, maxWidth = 1280, maxHeight = 1280
       }
 
       ctx.drawImage(img, 0, 0, width, height);
-      
-      // Exporta como JPEG com qualidade 0.7 (excelente equilíbrio entre peso e nitidez)
-      // JPEG é muito mais leve que PNG para fotos reais.
-      const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+      const compressedBase64 = canvas.toDataURL('image/jpeg', 0.8);
       resolve(compressedBase64);
     };
     img.onerror = (err) => reject(err);
@@ -46,18 +43,38 @@ export const resizeImage = (base64Str: string, maxWidth = 1280, maxHeight = 1280
 };
 
 /**
- * Tenta salvar no localStorage com tratamento de erro de cota excedida.
- * Se falhar mesmo após a compressão, avisa o usuário.
+ * Converte Base64 para Blob para upload
  */
-export const safeLocalStorageSet = (key: string, value: any) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) {
-    if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
-      console.warn('Cota do localStorage excedida. Tentando limpar dados antigos...');
-      // Se for um item de checklist, poderíamos tentar uma limpeza automática aqui
-      alert('O limite de armazenamento do seu navegador foi atingido. Tente usar fotos menores ou remover itens antigos.');
-    }
-    console.error('Erro crítico ao salvar no localStorage:', e);
+export const base64ToBlob = (base64: string): Blob => {
+  const byteString = atob(base64.split(',')[1]);
+  const mimeString = base64.split(',')[0].split(':')[1].split(';')[0];
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
   }
+  return new Blob([ab], { type: mimeString });
+};
+
+/**
+ * Faz upload de uma imagem para o Supabase Storage e retorna a URL pública
+ */
+export const uploadToSupabase = async (userId: string, folder: string, base64Data: string): Promise<string> => {
+  const blob = base64ToBlob(base64Data);
+  const fileName = `${userId}/${folder}/${Date.now()}.jpg`;
+
+  const { data, error } = await supabase.storage
+    .from('couple_assets')
+    .upload(fileName, blob, {
+      contentType: 'image/jpeg',
+      upsert: true
+    });
+
+  if (error) throw error;
+
+  const { data: publicUrlData } = supabase.storage
+    .from('couple_assets')
+    .getPublicUrl(fileName);
+
+  return publicUrlData.publicUrl;
 };
