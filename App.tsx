@@ -71,7 +71,7 @@ const mapDbEvent = (e: any): CalendarEvent => ({
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
-  const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+  const [authView, setAuthView] = useState<'login' | 'signup' | 'reset'>('login');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [fields, setFields] = useState({ email: '', password: '', confirmPassword: '' });
   const [authError, setAuthError] = useState('');
@@ -123,9 +123,22 @@ const App: React.FC = () => {
                 }
             }
         } catch (err: any) {
-            console.error('Erro de inicialização/conexão:', err);
-            if (mounted) {
-              setConnectionError(err.message || 'Falha ao conectar com o serviço.');
+            const errorMessage = err?.message || JSON.stringify(err);
+            
+            // Trata erros de Refresh Token forçando o logout em vez de travar a tela
+            if (
+              errorMessage.includes('Refresh Token') || 
+              errorMessage.includes('refresh_token') ||
+              errorMessage.includes('Invalid Refresh Token')
+            ) {
+                console.warn('Sessão inválida detectada. Limpando dados locais.');
+                await supabase.auth.signOut();
+                if (mounted) setSession(null);
+            } else {
+                console.error('Erro de inicialização/conexão:', err);
+                if (mounted) {
+                  setConnectionError(errorMessage || 'Falha ao conectar com o serviço.');
+                }
             }
         } finally {
             if (mounted) setIsCheckingSession(false);
@@ -328,6 +341,14 @@ const App: React.FC = () => {
         });
         if (error) throw error;
         alert('Conta criada! Verifique seu e-mail.');
+        setAuthView('login');
+      } else if (authView === 'reset') {
+        if (!fields.email) throw new Error('Informe seu e-mail para recuperação.');
+        const { error } = await supabase.auth.resetPasswordForEmail(fields.email, {
+            redirectTo: window.location.href,
+        });
+        if (error) throw error;
+        alert('Se o e-mail estiver cadastrado, você receberá um link para redefinir a senha.');
         setAuthView('login');
       } else {
         const { error } = await supabase.auth.signInWithPassword({
@@ -600,10 +621,17 @@ const App: React.FC = () => {
               <HeartIcon className="w-8 h-8 text-pink-500" />
             </div>
             <h1 className="text-4xl font-cursive text-gray-800 mb-2">Portal do Casal</h1>
-            <div className="flex bg-gray-100 p-1.5 rounded-2xl w-fit mx-auto">
-              <button onClick={() => setAuthView('login')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${authView === 'login' ? 'bg-white shadow-sm text-pink-500' : 'text-gray-400'}`}>Entrar</button>
-              <button onClick={() => setAuthView('signup')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${authView === 'signup' ? 'bg-white shadow-sm text-pink-500' : 'text-gray-400'}`}>Criar Conta</button>
-            </div>
+            
+            {authView !== 'reset' ? (
+                <div className="flex bg-gray-100 p-1.5 rounded-2xl w-fit mx-auto">
+                    <button onClick={() => setAuthView('login')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${authView === 'login' ? 'bg-white shadow-sm text-pink-500' : 'text-gray-400'}`}>Entrar</button>
+                    <button onClick={() => setAuthView('signup')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${authView === 'signup' ? 'bg-white shadow-sm text-pink-500' : 'text-gray-400'}`}>Criar Conta</button>
+                </div>
+            ) : (
+                <div className="flex bg-gray-100 p-1.5 rounded-2xl w-fit mx-auto">
+                    <span className="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-white shadow-sm text-pink-500">Recuperação</span>
+                </div>
+            )}
           </header>
 
           <form onSubmit={handleAuth} className="space-y-4 mb-8">
@@ -611,21 +639,40 @@ const App: React.FC = () => {
               <UserIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 group-focus-within:text-pink-400 transition-colors" />
               <input required type="email" placeholder="E-mail" value={fields.email} onChange={e => setFields({...fields, email: e.target.value})} className="w-full bg-white border-2 border-transparent rounded-[1.5rem] p-5 pl-14 font-bold outline-none focus:border-pink-200 focus:shadow-lg transition-all" />
             </div>
-            <div className="relative group">
-              <LockIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 group-focus-within:text-pink-400 transition-colors" />
-              <input required type="password" placeholder="Senha" value={fields.password} onChange={e => setFields({...fields, password: e.target.value})} className="w-full bg-white border-2 border-transparent rounded-[1.5rem] p-5 pl-14 font-bold outline-none focus:border-pink-200 focus:shadow-lg transition-all" />
-            </div>
+            
+            {authView !== 'reset' && (
+                <div className="relative group">
+                    <LockIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 group-focus-within:text-pink-400 transition-colors" />
+                    <input required type="password" placeholder="Senha" value={fields.password} onChange={e => setFields({...fields, password: e.target.value})} className="w-full bg-white border-2 border-transparent rounded-[1.5rem] p-5 pl-14 font-bold outline-none focus:border-pink-200 focus:shadow-lg transition-all" />
+                </div>
+            )}
+            
             {authView === 'signup' && (
               <div className="relative group animate-in slide-in-from-top-2 duration-300">
                 <LockIcon className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-300 group-focus-within:text-pink-400 transition-colors" />
                 <input required type="password" placeholder="Confirmar Senha" value={fields.confirmPassword} onChange={e => setFields({...fields, confirmPassword: e.target.value})} className="w-full bg-white border-2 border-transparent rounded-[1.5rem] p-5 pl-14 font-bold outline-none focus:border-pink-200 focus:shadow-lg transition-all" />
               </div>
             )}
+
+            {authView === 'login' && (
+                <div className="flex justify-end">
+                    <button type="button" onClick={() => setAuthView('reset')} className="text-[10px] font-bold text-gray-400 hover:text-pink-500 uppercase tracking-widest transition-colors">
+                        Esqueceu a senha?
+                    </button>
+                </div>
+            )}
+
             {authError && <p className="text-red-500 text-[10px] font-black text-center uppercase tracking-widest animate-pulse">{authError}</p>}
             
             <button type="submit" className="w-full py-5 bg-pink-500 text-white rounded-[1.5rem] font-black uppercase tracking-[0.2em] shadow-xl shadow-pink-200 hover:bg-gray-900 active:scale-95 transition-all text-sm">
-              {authView === 'login' ? 'Acessar Sonhos' : 'Começar Jornada'}
+              {authView === 'login' ? 'Acessar Sonhos' : authView === 'signup' ? 'Começar Jornada' : 'Enviar Link'}
             </button>
+
+            {authView === 'reset' && (
+                <button type="button" onClick={() => setAuthView('login')} className="w-full py-3 text-gray-400 font-bold uppercase tracking-widest text-[10px] hover:text-gray-600 transition-colors">
+                    Voltar para Login
+                </button>
+            )}
           </form>
         </div>
       </div>
@@ -637,7 +684,7 @@ const App: React.FC = () => {
       {(isProcessingImage || isLoadingData || isDeletingAccount) && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white p-8 rounded-[3rem] shadow-2xl flex flex-col items-center gap-4 animate-in zoom-in-95">
-             <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: theme.primaryColor, borderTopColor: 'transparent' }} />
+             <div className="w-12 h-12 border-4 border-t-transparent rounded-full animate-spin" style={{ borderTopColor: 'transparent', borderRightColor: theme.primaryColor, borderBottomColor: theme.primaryColor, borderLeftColor: theme.primaryColor }} />
              <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">
                 {isDeletingAccount ? 'Excluindo dados...' : (isLoadingData ? 'Sincronizando...' : 'Otimizando Imagem...')}
              </span>
